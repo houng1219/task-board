@@ -1,14 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@/convex/generated/react";
-import { api } from "@/convex/_generated/api";
 
 type TaskStatus = "todo" | "in_progress" | "review" | "done";
 type Assignee = "me" | "ai";
 
 interface Task {
-  _id: string;
+  id: string;
   title: string;
   description?: string;
   status: TaskStatus;
@@ -24,30 +22,78 @@ const columns: { status: TaskStatus; label: string; color: string }[] = [
   { status: "done", label: "✅ Done", color: "bg-green-100" },
 ];
 
-export default function TaskBoard() {
-  const tasks = useQuery(api.tasks.getTasks) as Task[] | undefined;
-  const createTask = useMutation(api.tasks.createTask);
-  const updateStatus = useMutation(api.tasks.updateTaskStatus);
-  const updateAssignee = useMutation(api.tasks.updateTaskAssignee);
-  const deleteTask = useMutation(api.tasks.deleteTask);
+const STORAGE_KEY = "task-board-tasks";
 
+export default function TaskBoard() {
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskAssignee, setNewTaskAssignee] = useState<Assignee>("me");
+  const [loaded, setLoaded] = useState(false);
 
-  const handleCreateTask = async (e: React.FormEvent) => {
+  // Load from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        setTasks(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to parse tasks", e);
+      }
+    }
+    setLoaded(true);
+  }, []);
+
+  // Save to localStorage on change
+  useEffect(() => {
+    if (loaded) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    }
+  }, [tasks, loaded]);
+
+  const createTask = (title: string, assignee: Assignee) => {
+    const now = Date.now();
+    const newTask: Task = {
+      id: `task-${now}`,
+      title,
+      status: "todo",
+      assignee,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setTasks([...tasks, newTask]);
+  };
+
+  const updateStatus = (id: string, status: TaskStatus) => {
+    setTasks(
+      tasks.map((t) =>
+        t.id === id ? { ...t, status, updatedAt: Date.now() } : t
+      )
+    );
+  };
+
+  const updateAssignee = (id: string, assignee: Assignee) => {
+    setTasks(
+      tasks.map((t) =>
+        t.id === id ? { ...t, assignee, updatedAt: Date.now() } : t
+      )
+    );
+  };
+
+  const deleteTask = (id: string) => {
+    setTasks(tasks.filter((t) => t.id !== id));
+  };
+
+  const handleCreateTask = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTaskTitle.trim()) return;
-
-    await createTask({
-      title: newTaskTitle,
-      status: "todo",
-      assignee: newTaskAssignee,
-    });
+    createTask(newTaskTitle, newTaskAssignee);
     setNewTaskTitle("");
   };
 
   const getTasksByStatus = (status: TaskStatus) =>
-    tasks?.filter((task) => task.status === status) || [];
+    tasks.filter((task) => task.status === status);
+
+  if (!loaded) return null;
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
@@ -100,83 +146,58 @@ export default function TaskBoard() {
 
               <div className="space-y-3">
                 {getTasksByStatus(column.status).map((task) => (
-                  <TaskCard
-                    key={task._id}
-                    task={task}
-                    columns={columns}
-                    onUpdateStatus={updateStatus}
-                    onUpdateAssignee={updateAssignee}
-                    onDelete={deleteTask}
-                  />
+                  <div
+                    key={task.id}
+                    className="bg-white rounded-lg shadow p-4 hover:shadow-md transition"
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <h3 className="font-medium text-gray-800">{task.title}</h3>
+                      <button
+                        onClick={() => deleteTask(task.id)}
+                        className="text-gray-400 hover:text-red-500"
+                      >
+                        ×
+                      </button>
+                    </div>
+
+                    {/* Assignee */}
+                    <div className="mb-3">
+                      <select
+                        value={task.assignee}
+                        onChange={(e) =>
+                          updateAssignee(task.id, e.target.value as Assignee)
+                        }
+                        className="text-xs px-2 py-1 border rounded bg-gray-50"
+                      >
+                        <option value="me">👤 我</option>
+                        <option value="ai">🤖 AI</option>
+                      </select>
+                    </div>
+
+                    {/* Status */}
+                    <div className="flex gap-1 flex-wrap">
+                      {columns
+                        .filter((c) => c.status !== task.status)
+                        .map((column) => (
+                          <button
+                            key={column.status}
+                            onClick={() => updateStatus(task.id, column.status)}
+                            className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded transition"
+                          >
+                            → {column.label.split(" ")[0]}
+                          </button>
+                        ))}
+                    </div>
+
+                    <div className="text-xs text-gray-400 mt-3">
+                      更新於 {new Date(task.updatedAt).toLocaleString("zh-TW")}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
           ))}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function TaskCard({
-  task,
-  columns,
-  onUpdateStatus,
-  onUpdateAssignee,
-  onDelete,
-}: {
-  task: Task;
-  columns: { status: TaskStatus; label: string; color: string }[];
-  onUpdateStatus: any;
-  onUpdateAssignee: any;
-  onDelete: any;
-}) {
-  return (
-    <div className="bg-white rounded-lg shadow p-4 hover:shadow-md transition">
-      <div className="flex items-start justify-between mb-2">
-        <h3 className="font-medium text-gray-800">{task.title}</h3>
-        <button
-          onClick={() => onDelete({ id: task._id })}
-          className="text-gray-400 hover:text-red-500"
-        >
-          ×
-        </button>
-      </div>
-
-      {/* Assignee */}
-      <div className="mb-3">
-        <select
-          value={task.assignee}
-          onChange={(e) =>
-            onUpdateAssignee({
-              id: task._id,
-              assignee: e.target.value as Assignee,
-            })
-          }
-          className="text-xs px-2 py-1 border rounded bg-gray-50"
-        >
-          <option value="me">👤 我</option>
-          <option value="ai">🤖 AI</option>
-        </select>
-      </div>
-
-      {/* Status */}
-      <div className="flex gap-1 flex-wrap">
-        {columns
-          .filter((c) => c.status !== task.status)
-          .map((column) => (
-            <button
-              key={column.status}
-              onClick={() => onUpdateStatus({ id: task._id, status: column.status })}
-              className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded transition"
-            >
-              → {column.label.split(" ")[0]}
-            </button>
-          ))}
-      </div>
-
-      <div className="text-xs text-gray-400 mt-3">
-        更新於 {new Date(task.updatedAt).toLocaleString("zh-TW")}
       </div>
     </div>
   );
